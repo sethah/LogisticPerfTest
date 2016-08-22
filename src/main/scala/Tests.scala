@@ -7,18 +7,22 @@ import java.io.FileWriter
 import java.io.BufferedWriter
 
 
-case class TestResult(settings: scala.collection.mutable.HashMap[String, String]) {
+case class TestResult(results: scala.collection.mutable.HashMap[String, String]) {
 
   def csvRows: String = {
-    val argString = settings.foldLeft("") { case (s, (k, v)) =>
+    val argString = results.foldLeft("") { case (s, (k, v)) =>
       s + k + "->" + v + "|"
     }
     argString
   }
+
+  def writeToCSV(filePath: String = "tests.csv"): Unit = {
+    scala.tools.nsc.io.File(filePath).appendAll(csvRows + "\n")
+  }
 }
 
 object Tests {
-  def compareSizes(spark: SparkSession, isML: Boolean): TestResult = {
+  def compareSizes(spark: SparkSession, isML: Boolean): Seq[TestResult] = {
     val seed = 4L
     val mlTest = new LogisticTest()
     val mllibTest = new OldMultinomialLogisticTest()
@@ -37,34 +41,29 @@ object Tests {
     args += ("regParam" -> regParam.toString, "elasticNetParam" -> elasticNetParam.toString,
       "fitIntercept" -> fitIntercept.toString, "standardization" -> standardization.toString,
       "numClasses" -> numClasses.toString, "numFeatures" -> numFeatures.toString)
-    val args1 = new scala.collection.mutable.HashMap[String, String]
-    args1 += ("regParam" -> regParam.toString, "elasticNetParam" -> elasticNetParam.toString,
-      "fitIntercept" -> fitIntercept.toString, "standardization" -> standardization.toString,
-      "numClasses" -> (numClasses).toString, "numFeatures" -> numFeatures.toString)
-    sizes.indices.foreach { i =>
+    sizes.indices.map { i =>
       val rdd = MultinomialDataGenerator.makeData(spark, numClasses, numFeatures,
         fitIntercept, sizes(i), seed)
       val ml = true
       if (!ml) {
         val mllibTraining = mllibTest.convertData(spark, rdd)
-        val (mllibModel, mllibTime) = mllibTest.runTest(mllibTraining, args1, 1)
+        val (mllibModel, mllibTime) = mllibTest.runTest(mllibTraining, args, 1)
         mllibTimings(i) = mllibTime
         mllibMetrics(i) = mllibTest.validate(mllibModel, mllibTest.convertData(spark, rdd))
+        args += ("numRows" -> sizes(i).toString)
       } else {
         val mlTraining = mlTest.convertData(spark, rdd)//.cache()
         val (mlModel, mlTime) = mlTest.runTest(mlTraining, args, 1)
         mlTimings(i) = mlTime
         mlMetrics(i) = mlTest.validate(mlModel, mlTest.convertData(spark, rdd))
 //        mlTraining.unpersist()
+        args += ("numRows" -> sizes(i).toString)
       }
-      println("---")
+      TestResult(args.clone())
     }
-//    println("ML:", mlTimings.mkString(","))
-//    println("MLLIB:", mllibTimings.mkString(","))
-    TestResult(args)
   }
 
-  def compareSizesWithL2(spark: SparkSession): TestResult = {
+  def compareSizesWithL2(spark: SparkSession): Seq[TestResult] = {
     val seed = 4L
     val mlTest = new LogisticTest()
     val mllibTest = new OldMultinomialLogisticTest()
@@ -84,7 +83,7 @@ object Tests {
     args += ("regParam" -> regParam.toString, "elasticNetParam" -> elasticNetParam.toString,
       "fitIntercept" -> fitIntercept.toString, "standardization" -> standardization.toString,
       "numClasses" -> numClasses.toString, "numFeatures" -> numFeatures.toString)
-    sizes.indices.foreach { i =>
+    sizes.indices.map { i =>
       val rdd = MultinomialDataGenerator.makeData(spark, numClasses, numFeatures,
         fitIntercept, sizes(i), seed)
       val Array(training, test) = rdd.randomSplit(Array(0.8, 0.2))
@@ -99,25 +98,23 @@ object Tests {
       mlTimings(i) = mlTime
       mlMetrics(i) = mlTest.validate(mlModel, mlTest.convertData(spark, test))
       mlTraining.unpersist()
+      args += ("numRows" -> sizes(i).toString)
+
+      TestResult(args.clone())
     }
-    println("ML:", mlTimings.mkString(","))
-    println("MLLIB:", mllibTimings.mkString(","))
-    TestResult(args)
   }
 
   def compareFeatureSizes(spark: SparkSession,
-                          isML: Boolean, rows: Int, cols: Int): TestResult = {
+                          isML: Boolean, rows: Int, cols: Int): Seq[TestResult] = {
     val seed = 4L
-//    val mlTest = new MultinomialLogisticTest()
     val mlTest = new LogisticTest()
     val mllibTest = new OldMultinomialLogisticTest()
     val size = rows
-    val numFeatures = Array(cols)
+    val numFeatures = Array(10, 20, 30)
     val mlTimings = Array.ofDim[Double](numFeatures.length)
     val mllibTimings = Array.ofDim[Double](numFeatures.length)
     val mlMetrics = Array.ofDim[Double](numFeatures.length)
     val mllibMetrics = Array.ofDim[Double](numFeatures.length)
-//    val numClasses = if (isML) 5 else 5
     val numClasses = 2
     val regParam = 0.0
     val elasticNetParam = 0.0
@@ -128,35 +125,30 @@ object Tests {
     args += ("regParam" -> regParam.toString, "elasticNetParam" -> elasticNetParam.toString,
       "fitIntercept" -> fitIntercept.toString, "standardization" -> standardization.toString,
       "numClasses" -> numClasses.toString, "numPoints" -> size.toString,
-      "maxIter" -> maxIter.toString, "numFeatures" -> numFeatures.head.toString)
-    numFeatures.indices.foreach { i =>
+      "maxIter" -> maxIter.toString)
+    numFeatures.indices.map { i =>
+      println(numFeatures(i))
       val rdd = MultinomialDataGenerator.makeData(spark, numClasses, numFeatures(i),
         fitIntercept, size, seed)
       val Array(training, test) = rdd.randomSplit(Array(0.8, 0.2))
-      val counts = training.map(lp => lp.label).countByValue()
       if (isML) {
-        val mlTraining = mlTest.convertData(spark, training)//.cache()
+        val mlTraining = mlTest.convertData(spark, training)
         val (mlModel, mlTime) = mlTest.runTest(mlTraining, args, 1)
         args += ("time" -> mlTime.toString)
         val mlMetric = mlTest.validate(mlModel, mlTest.convertData(spark, test))
         args += ("metric" -> mlMetric.toString)
         args += ("algo" -> "ml")
-//        mlTraining.unpersist()
+        args += ("numFeatures" -> numFeatures(i).toString)
+        println(args)
       } else {
-        val mllibTraining = mllibTest.convertData(spark, training)//.cache()
+        val mllibTraining = mllibTest.convertData(spark, training)
         val (mllibModel, mllibTime) = mllibTest.runTest(mllibTraining, args, 1)
         args += ("time" -> mllibTime.toString)
         val mllibMetric = mllibTest.validate(mllibModel, mllibTest.convertData(spark, test))
         args += ("metric" -> mllibMetric.toString)
         args += ("algo" -> "mllib")
-//        mllibTraining.unpersist()
       }
-      println("---")
+      TestResult(args.clone())
     }
-    TestResult(args)
-  }
-
-  def writeToCSV(tests: TestResult, filePath: String = "tests.csv"): Unit = {
-    scala.tools.nsc.io.File(filePath).appendAll(tests.csvRows + "\n")
   }
 }

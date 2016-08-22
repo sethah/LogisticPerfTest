@@ -16,8 +16,8 @@ object MyTest {
     val rows = args(1).toInt
     val cols = args(2).toInt
 
-    val testResult = Tests.compareFeatureSizes(spark, isML, rows, cols)
-    Tests.writeToCSV(testResult, "/Users/sethhendrickson/tests.txt")
+    val testResults = Tests.compareFeatureSizes(spark, isML, rows, cols)
+    testResults.foreach(_.writeToCSV("/Users/sethhendrickson/tests.txt"))
 
     spark.stop()
   }
